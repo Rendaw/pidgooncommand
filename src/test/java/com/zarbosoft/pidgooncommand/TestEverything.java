@@ -4,6 +4,9 @@ import com.zarbosoft.interface1.Configuration;
 import org.junit.Test;
 import org.reflections.Reflections;
 
+import java.util.Arrays;
+import java.util.List;
+
 import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.core.IsEqual.equalTo;
 import static org.junit.Assert.assertThat;
@@ -108,5 +111,20 @@ public class TestEverything {
 	@Test
 	public void rootHelp() {
 		Command.showHelp(new Reflections("com.zarbosoft.pidgooncommand"), CommandLine.class, "test usage: ");
+	}
+
+	@Configuration
+	public static class ListHolder {
+		@Configuration(name = "-x")
+		public List<Boolean> x;
+	}
+
+	@Test
+	public void testList() {
+		final ListHolder out =
+				Command.parse(new Reflections("com.zarbosoft.pidgooncommand"), ListHolder.class, new String[] {
+						"-x", "true", "-x", "true", "-x", "false"
+				});
+		assertThat(out.x, equalTo(Arrays.asList(true, true, false)));
 	}
 }

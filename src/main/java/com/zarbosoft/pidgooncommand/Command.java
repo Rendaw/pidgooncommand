@@ -6,9 +6,10 @@ import com.google.common.collect.Iterables;
 import com.zarbosoft.interface1.Configuration;
 import com.zarbosoft.interface1.Walk;
 import com.zarbosoft.pidgoon.AbortParse;
+import com.zarbosoft.pidgoon.Node;
 import com.zarbosoft.pidgoon.events.*;
 import com.zarbosoft.pidgoon.internal.Helper;
-import com.zarbosoft.pidgoon.internal.Node;
+import com.zarbosoft.pidgoon.nodes.Repeat;
 import com.zarbosoft.pidgoon.nodes.Sequence;
 import com.zarbosoft.pidgoon.nodes.Union;
 import com.zarbosoft.rendaw.common.ChainComparator;
@@ -56,7 +57,7 @@ public class Command {
 		boolean earlyExit() default false;
 	}
 
-	private static class ArgEvent implements Event {
+	private static class ArgEvent implements MatchingEvent {
 		public final String value;
 
 		public ArgEvent(final String arg) {
@@ -67,7 +68,7 @@ public class Command {
 			this.value = null;
 		}
 
-		public boolean matches(final Event event) {
+		public boolean matches(final MatchingEvent event) {
 			if (!(event instanceof ArgEvent))
 				return false;
 			if (value == null)
@@ -179,10 +180,7 @@ public class Command {
 
 			@Override
 			public Iterable<Line> visitBoolean(final Field field) {
-				final Argument argument = field == null ? null : field.getAnnotation(Argument.class);
-				if (argument != null && argument.index() >= 0)
-					return ImmutableList.of(new Line("true"), new Line("false"));
-				return ImmutableList.of();
+				return ImmutableList.of(new Line("true"), new Line("false"));
 			}
 
 			@Override
@@ -196,23 +194,24 @@ public class Command {
 
 			@Override
 			public Iterable<Line> visitList(final Field field, final Iterable<Line> inner) {
-				return Iterables.concat(ImmutableList.of(new Line("(may be specified multiple times)")), inner);
+				return Iterables.concat(ImmutableList.of(new Line("(may be specified multiple times consecutively)")),
+						inner
+				);
 			}
 
 			@Override
 			public Iterable<Line> visitSet(final Field field, final Iterable<Line> inner) {
-				return Iterables.concat(ImmutableList.of(new Line("(may be specified multiple times)")), inner);
+				return Iterables.concat(ImmutableList.of(new Line("(may be specified multiple times consecutively)")),
+						inner
+				);
 			}
 
 			@Override
 			public Iterable<Line> visitMap(final Field field, final Iterable<Line> inner) {
-				return Stream.concat(
-						Stream.of(new Line("KEY VALUE"),
-								new Line("where KEY is any string."),
-								new Line("where VALUE is:")
-						),
-						stream(inner).map(line -> line.indent())
-				).collect(Collectors.toList());
+				return Stream.concat(Stream.of(new Line("KEY VALUE"),
+						new Line("where KEY is any string."),
+						new Line("where VALUE is:")
+				), stream(inner).map(line -> line.indent())).collect(Collectors.toList());
 			}
 
 			@Override
@@ -277,11 +276,15 @@ public class Command {
 									Stream<Line> description = configuration.description().isEmpty() ?
 											Stream.empty() :
 											Stream.of(new Line(configuration.description()));
-									Stream<Line> values = !keyword.second.second.iterator().hasNext() ?
-											null :
-											Stream.of(Stream.of(new Line("Value:")),
-													stream(keyword.second.second).<Line>map(line -> line.indent())
-											).flatMap(l -> l);
+									Stream<Line> values;
+									if (field2.getType() == Boolean.class || field2.getType() == Boolean.TYPE) {
+										values = null;
+									} else if (keyword.second.second.iterator().hasNext())
+										values = Stream.of(Stream.of(new Line("Value:")),
+												stream(keyword.second.second).<Line>map(line -> line.indent())
+										).flatMap(l -> l);
+									else
+										values = null;
 									return Stream.<Stream<Line>>of(name,
 											description == null && values == null ?
 													Stream.empty() :
@@ -312,14 +315,14 @@ public class Command {
 		grammar.add("root", Walk.walk(reflections, klass, new Walk.Visitor<Node>() {
 			@Override
 			public Node visitString(final Field field) {
-				return new BakedOperator(new Terminal(new ArgEvent()), store -> {
+				return new Operator(new MatchingEventTerminal(new ArgEvent()), store -> {
 					return store.pushStack(((ArgEvent) store.top()).value);
 				});
 			}
 
 			@Override
 			public Node visitInteger(final Field field) {
-				return new BakedOperator(new Terminal(new ArgEvent()), store -> {
+				return new Operator(new MatchingEventTerminal(new ArgEvent()), store -> {
 					final ArgEvent event = (ArgEvent) store.top();
 					try {
 						return store.pushStack(Integer.parseInt(event.value));
@@ -331,7 +334,7 @@ public class Command {
 
 			@Override
 			public Node visitDouble(final Field field) {
-				return new BakedOperator(new Terminal(new ArgEvent()), store -> {
+				return new Operator(new MatchingEventTerminal(new ArgEvent()), store -> {
 					final ArgEvent event = (ArgEvent) store.top();
 					try {
 						return store.pushStack(Double.parseDouble(event.value));
@@ -343,27 +346,21 @@ public class Command {
 
 			@Override
 			public Node visitBoolean(final Field field) {
-				final Argument argument = field == null ? null : field.getAnnotation(Argument.class);
-				if (argument != null && argument.index() >= 0)
-					return new BakedOperator(new Terminal(new ArgEvent()), store -> {
-						final ArgEvent event = (ArgEvent) store.top();
-						try {
-							return store.pushStack(Boolean.parseBoolean(event.value));
-						} catch (final NumberFormatException e) {
-							throw new AbortParse(String.format("%s is not a boolean.", event.value));
-						}
-					});
-				else
-					return new BakedOperator(store -> {
-						return store.pushStack(true);
-					});
+				return new Operator(new MatchingEventTerminal(new ArgEvent()), store -> {
+					final ArgEvent event = (ArgEvent) store.top();
+					try {
+						return store.pushStack(Boolean.parseBoolean(event.value));
+					} catch (final NumberFormatException e) {
+						throw new AbortParse(String.format("%s is not a boolean.", event.value));
+					}
+				});
 			}
 
 			@Override
 			public Node visitEnum(final Field field, final Class<?> enumClass) {
 				final Union union = new Union();
 				Walk.enumValues(enumClass).stream().forEach(pair -> {
-					union.add(new BakedOperator(new Terminal(new ArgEvent(Walk.decideName(pair.second))), store -> {
+					union.add(new Operator(new MatchingEventTerminal(new ArgEvent(Walk.decideName(pair.second))), store -> {
 						return store.pushStack(pair.first);
 					}));
 				});
@@ -383,8 +380,8 @@ public class Command {
 			@Override
 			public Node visitMap(final Field field, final Node inner) {
 				return new Sequence()
-						.add(new Terminal(new ArgEvent()))
-						.add(new BakedOperator(new Terminal(new ArgEvent()), store -> {
+						.add(new MatchingEventTerminal(new ArgEvent()))
+						.add(new Operator(new MatchingEventTerminal(new ArgEvent()), store -> {
 							return store.pushStack(Double.parseDouble(((ArgEvent) store.top()).value));
 						}));
 			}
@@ -400,7 +397,7 @@ public class Command {
 			) {
 				final Union union = new Union();
 				derived.forEach(pair -> union.add(new Sequence()
-						.add(new Terminal(new ArgEvent(Walk.decideName(pair.first))))
+						.add(new MatchingEventTerminal(new ArgEvent(Walk.decideName(pair.first))))
 						.add(pair.second)));
 				seenAbstract.put(klass, union);
 				return union;
@@ -416,7 +413,7 @@ public class Command {
 				final Union root = new Union();
 				final Sequence positional = new Sequence();
 				streamPositional(klass, fields).forEach(pair -> {
-					positional.add(new BakedOperator(pair.second, store -> {
+					positional.add(new Operator(pair.second, store -> {
 						store = (Store) store.pushStack(pair.first);
 						return Helper.stackDoubleElement(store);
 					}));
@@ -427,22 +424,33 @@ public class Command {
 					final Field field2 = pair.second.first;
 					final Configuration configuration = field2.getAnnotation(Configuration.class);
 					final Node node = pair.second.second;
-					final Union out = new Union();
+					final Union union = new Union();
+					final List<Node> prefixes = new ArrayList<>();
 					if (argument != null && !argument.shortName().isEmpty()) {
-						out.add(new Sequence()
-								.add(new Terminal(new ArgEvent(argument.shortName())))
-								.add(new BakedOperator(node, store -> {
-									store = (Store) store.pushStack(field2);
-									return Helper.stackDoubleElement(store);
-								})));
+						prefixes.add(new MatchingEventTerminal(new ArgEvent(argument.shortName())));
 					}
 					final String longName = Walk.decideName(field2);
-					out.add(new Sequence()
-							.add(new Terminal(new ArgEvent(longName)))
-							.add(new BakedOperator(node, store -> {
+					prefixes.add(new MatchingEventTerminal(new ArgEvent(longName)));
+					for (final Node prefix : prefixes) {
+						if (field2.getType() == Boolean.class || field2.getType() == Boolean.TYPE)
+							union.add(new Operator(prefix, store -> {
+								store = (Store) store.pushStack(true);
+								store = (Store) store.pushStack(field2);
+								return Helper.stackDoubleElement(store);
+							}));
+						else
+							union.add(new Sequence().add(prefix).add(new Operator(node, store -> {
 								store = (Store) store.pushStack(field2);
 								return Helper.stackDoubleElement(store);
 							})));
+					}
+					final Node out;
+					if (Collection.class.isAssignableFrom(field2.getType())) {
+						out = new Repeat(union).min(1);
+					} else if (Map.class.isAssignableFrom(field2.getType())) {
+						out = new Repeat(union).min(1);
+					} else
+						out = union;
 					if (argument != null && argument.earlyExit())
 						root.add(out);
 					else
@@ -450,9 +458,8 @@ public class Command {
 				});
 				positional.add(keyword);
 				root.add(positional);
-				final Node rule = new Sequence()
-						.add(new BakedOperator(store -> store.pushStack(0)))
-						.add(new BakedOperator(root, store -> {
+				final Node rule =
+						new Sequence().add(new Operator(store -> store.pushStack(0))).add(new Operator(root, store -> {
 							final Object out = uncheck(klass::newInstance);
 							final java.util.Set<Field> fields2 = new HashSet<>();
 							fields2.addAll(fields.stream().map(pair -> pair.first).collect(Collectors.toList()));
@@ -486,6 +493,15 @@ public class Command {
 										pair.second.set(out, pair.first);
 								});
 							});
+							for (final Field field2 : out.getClass().getFields()) {
+								if (field2.getAnnotation(Configuration.class) == null)
+									continue;
+								if (!List.class.isAssignableFrom(field2.getType()))
+									continue;
+								final List value = uncheck(() -> (List<?>) field2.get(out));
+								if (value != null)
+									Collections.reverse(value);
+							}
 							return store.pushStack(out);
 						}));
 				seenConcrete.put(klass, rule);
