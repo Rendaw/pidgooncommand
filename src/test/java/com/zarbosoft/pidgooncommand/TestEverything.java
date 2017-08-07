@@ -13,7 +13,8 @@ import static org.junit.Assert.assertThat;
 
 public class TestEverything {
 
-	@Configuration(description = "This is an embedded class.")
+	@Configuration
+	@Command.Argument(description = "This is an embedded class.")
 	public static class SubCommand1 {
 		@Command.Argument(index = 0)
 		@Configuration(name = "A")
@@ -22,7 +23,8 @@ public class TestEverything {
 		public int b = 44;
 	}
 
-	@Configuration(description = "The princess has abandoned the castle.")
+	@Configuration
+	@Command.Argument(description = "The princess has abandoned the castle.")
 	public static abstract class SubCommand2Base {
 
 	}
@@ -44,17 +46,17 @@ public class TestEverything {
 
 	@Configuration
 	public static class CommandLine {
-		@Command.Argument(index = 0)
-		@Configuration(name = "ARG_A", description = "Testing")
+		@Command.Argument(index = 0, description = "Testing")
+		@Configuration(name = "ARG_A")
 		public int a;
-		@Command.Argument(index = 1)
-		@Configuration(name = "ARG_B", description = "Must be true.")
+		@Command.Argument(index = 1, description = "Must be true.")
+		@Configuration(name = "ARG_B")
 		public boolean b;
-		@Command.Argument(index = 2)
-		@Configuration(name = "ARG_C", description = "Not sure what this does.")
+		@Command.Argument(index = 2, description = "Not sure what this does.")
+		@Configuration(name = "ARG_C")
 		public double c;
-		@Command.Argument(index = 3)
-		@Configuration(name = "DANGEROUS", description = "Any string.")
+		@Command.Argument(index = 3, description = "Any string.")
+		@Configuration(name = "DANGEROUS")
 		public String d;
 		@Command.Argument(index = 4)
 		@Configuration(name = "GENERAL")
@@ -62,15 +64,16 @@ public class TestEverything {
 		@Command.Argument(index = 5)
 		@Configuration(name = "SUBCOMMAND")
 		public SubCommand2Base sub2;
-		@Command.Argument(shortName = "-u")
-		@Configuration(name = "--ultima", description = "Default is 7.", optional = true)
+		@Command.Argument(shortName = "-u", description = "Default is 7.")
+		@Configuration(name = "--ultima", optional = true)
 		public int e = 7;
 		@Command.Argument(shortName = "-f")
 		@Configuration(name = "--f")
 		public boolean f = false;
 		@Configuration(name = "--g", optional = true)
 		public double g;
-		@Configuration(description = "No description", optional = true)
+		@Command.Argument(description = "No description")
+		@Configuration(optional = true)
 		public String h;
 		@Configuration(name = "--out-of-names", optional = true)
 		public SubCommand2Base sub3;

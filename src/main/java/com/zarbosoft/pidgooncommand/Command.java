@@ -9,6 +9,7 @@ import com.zarbosoft.pidgoon.AbortParse;
 import com.zarbosoft.pidgoon.Node;
 import com.zarbosoft.pidgoon.events.*;
 import com.zarbosoft.pidgoon.internal.Helper;
+import com.zarbosoft.pidgoon.nodes.Reference;
 import com.zarbosoft.pidgoon.nodes.Repeat;
 import com.zarbosoft.pidgoon.nodes.Sequence;
 import com.zarbosoft.pidgoon.nodes.Union;
@@ -55,6 +56,11 @@ public class Command {
 		 * @return
 		 */
 		boolean earlyExit() default false;
+
+		/**
+		 * @return
+		 */
+		String description() default "";
 	}
 
 	private static class ArgEvent implements MatchingEvent {
@@ -82,7 +88,7 @@ public class Command {
 		}
 	}
 
-	private static <T> Stream<Pair<Field, T>> streamPositional(
+	private static <T> Stream<Pair<Argument, Pair<Field, T>>> streamPositional(
 			final Class<?> klass, final List<Pair<Field, T>> fields
 	) {
 		final Set<Integer> seenIndices = new HashSet<>();
@@ -105,7 +111,7 @@ public class Command {
 								pair.first.index(),
 								klass
 						));
-					return pair.second;
+					return pair;
 				});
 	}
 
@@ -160,8 +166,8 @@ public class Command {
 				return new Line(indent + 1, text);
 			}
 		}
-		final Map<Class<?>, Iterable<Line>> seenAbstract = new HashMap();
-		Walk.walk(reflections, rootClass, new Walk.Visitor<Iterable<Line>>() {
+		final List<Iterable<Line>> lines = new ArrayList<>();
+		Walk.walk(reflections, new Walk.TypeInfo(rootClass), new Walk.Visitor<Iterable<Line>>() {
 
 			@Override
 			public Iterable<Line> visitString(final Field field) {
@@ -208,50 +214,42 @@ public class Command {
 
 			@Override
 			public Iterable<Line> visitMap(final Field field, final Iterable<Line> inner) {
-				return Stream.concat(Stream.of(new Line("KEY VALUE"),
-						new Line("where KEY is any string."),
-						new Line("where VALUE is:")
-				), stream(inner).map(line -> line.indent())).collect(Collectors.toList());
-			}
-
-			@Override
-			public Iterable<Line> visitAbstractShort(final Field field, final Class<?> klass) {
-				return seenAbstract.get(klass);
+				return Stream.concat(
+						Stream.of(new Line("KEY VALUE"),
+								new Line("where KEY is any string."),
+								new Line("where VALUE is:")
+						),
+						stream(inner).map(line -> line.indent())
+				).collect(Collectors.toList());
 			}
 
 			@Override
 			public Iterable<Line> visitAbstract(
 					final Field field, final Class<?> klass, final List<Pair<Class<?>, Iterable<Line>>> derived
 			) {
-				final Iterable<Line> out = derived
-						.stream()
-						.map(pair -> new Line(Walk.decideName(pair.first)))
-						.collect(Collectors.toList());
-				seenAbstract.put(klass, out);
-				return out;
+				return derived.stream().map(pair -> new Line(Walk.decideName(pair.first))).collect(Collectors.toList());
 			}
 
 			@Override
 			public Iterable<Line> visitConcreteShort(final Field field, final Class<?> klass) {
-				return null;
+				return ImmutableList.of(new Line(Walk.decideName(klass)));
 			}
 
 			@Override
-			public Iterable<Line> visitConcrete(
+			public void visitConcrete(
 					final Field field, final Class<?> klass, final List<Pair<Field, Iterable<Line>>> fields
 			) {
 				final Stream<Line> positionalStream = streamPositional(klass, fields).flatMap(positional -> {
 					final Configuration configuration =
-							uncheck(() -> positional.first.getAnnotation(Configuration.class));
-					Stream<Line> name = Stream.of(new Line(""), new Line(Walk.decideName(positional.first)));
-					Stream<Line> description = configuration.description().isEmpty() ?
+							uncheck(() -> positional.second.first.getAnnotation(Configuration.class));
+					Stream<Line> name = Stream.of(new Line(""), new Line(Walk.decideName(positional.second.first)));
+					final Argument argument = positional.first;
+					Stream<Line> description = argument == null || argument.description().isEmpty() ?
 							Stream.empty() :
-							Stream.<Line>of(new Line(configuration.description()));
-					Stream<Line> values = Stream
-							.of(Stream.of(new Line("Value:")),
-									stream(positional.second).<Line>map(line -> line.indent())
-							)
-							.flatMap(l -> l);
+							Stream.<Line>of(new Line(argument.description()));
+					Stream<Line> values = Stream.of(Stream.of(new Line("Value:")),
+							stream(positional.second.second).<Line>map(line -> line.indent())
+					).flatMap(l -> l);
 					return Stream.of(name,
 							Stream.of(new Line("")),
 							Stream.concat(description, values).map(line -> line.indent())
@@ -273,9 +271,9 @@ public class Command {
 													", " + argument.shortName(),
 											configuration.optional() ? " (optional)" : ""
 									)));
-									Stream<Line> description = configuration.description().isEmpty() ?
+									Stream<Line> description = argument == null || argument.description().isEmpty() ?
 											Stream.empty() :
-											Stream.of(new Line(configuration.description()));
+											Stream.of(new Line(argument.description()));
 									Stream<Line> values;
 									if (field2.getType() == Boolean.class || field2.getType() == Boolean.TYPE) {
 										values = null;
@@ -296,23 +294,26 @@ public class Command {
 									).flatMap(l -> l);
 								}).map(line -> line.indent().indent())
 						).flatMap(l -> l);
-				return Stream.of(Stream.of(new Line(String.format("%s%s%s",
+				lines.add(Stream.of(Stream.of(new Line(String.format("%s%s%s",
 						klass == rootClass ? usagePrefix : "",
 						streamPositional(klass, fields)
-								.map(pair -> Walk.decideName(pair.first))
+								.map(pair -> Walk.decideName(pair.second.first))
 								.collect(Collectors.joining(" ")),
 						hasKeywords ? " [keyword arguments]" : ""
-				))), positionalStream, keywordStream).flatMap(l -> l).collect(Collectors.toList());
+				))), positionalStream, keywordStream).flatMap(l -> l).collect(Collectors.toList()));
 			}
-		}).forEach(line -> System.out.format("%s%s\n", Strings.repeat("  ", line.indent), line.text));
+		});
+		lines.forEach(iterable -> iterable.forEach(line -> System.out.format("%s%s\n",
+				Strings.repeat("  ", line.indent),
+				line.text
+		)));
 		System.out.flush();
 	}
 
 	public static <T> T parse(final Reflections reflections, final Class<T> klass, final String[] args) {
 		final Grammar grammar = new Grammar();
-		final Map<Class<?>, Node> seenAbstract = new HashMap<>();
 		final Map<Class<?>, Node> seenConcrete = new HashMap<>();
-		grammar.add("root", Walk.walk(reflections, klass, new Walk.Visitor<Node>() {
+		grammar.add("root", Walk.walk(reflections, new Walk.TypeInfo(klass), new Walk.Visitor<Node>() {
 			@Override
 			public Node visitString(final Field field) {
 				return new Operator(new MatchingEventTerminal(new ArgEvent()), store -> {
@@ -360,9 +361,11 @@ public class Command {
 			public Node visitEnum(final Field field, final Class<?> enumClass) {
 				final Union union = new Union();
 				Walk.enumValues(enumClass).stream().forEach(pair -> {
-					union.add(new Operator(new MatchingEventTerminal(new ArgEvent(Walk.decideName(pair.second))), store -> {
-						return store.pushStack(pair.first);
-					}));
+					union.add(new Operator(new MatchingEventTerminal(new ArgEvent(Walk.decideName(pair.second))),
+							store -> {
+								return store.pushStack(pair.first);
+							}
+					));
 				});
 				return union;
 			}
@@ -387,11 +390,6 @@ public class Command {
 			}
 
 			@Override
-			public Node visitAbstractShort(final Field field, final Class<?> klass) {
-				return seenAbstract.get(klass);
-			}
-
-			@Override
 			public Node visitAbstract(
 					final Field field, final Class<?> klass, final List<Pair<Class<?>, Node>> derived
 			) {
@@ -399,22 +397,21 @@ public class Command {
 				derived.forEach(pair -> union.add(new Sequence()
 						.add(new MatchingEventTerminal(new ArgEvent(Walk.decideName(pair.first))))
 						.add(pair.second)));
-				seenAbstract.put(klass, union);
 				return union;
 			}
 
 			@Override
 			public Node visitConcreteShort(final Field field, final Class<?> klass) {
-				return seenConcrete.get(klass);
+				return new Reference(klass);
 			}
 
 			@Override
-			public Node visitConcrete(final Field field, final Class<?> klass, final List<Pair<Field, Node>> fields) {
+			public void visitConcrete(final Field field, final Class<?> klass, final List<Pair<Field, Node>> fields) {
 				final Union root = new Union();
 				final Sequence positional = new Sequence();
 				streamPositional(klass, fields).forEach(pair -> {
-					positional.add(new Operator(pair.second, store -> {
-						store = (Store) store.pushStack(pair.first);
+					positional.add(new Operator(pair.second.second, store -> {
+						store = (Store) store.pushStack(pair.second.first);
 						return Helper.stackDoubleElement(store);
 					}));
 				});
@@ -504,8 +501,7 @@ public class Command {
 							}
 							return store.pushStack(out);
 						}));
-				seenConcrete.put(klass, rule);
-				return rule;
+				grammar.add(klass, rule);
 			}
 		}));
 		EventStream<T> stream = new Parse<T>().grammar(grammar).parse();
